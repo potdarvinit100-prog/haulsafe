@@ -1,13 +1,19 @@
-"""External API clients: Nominatim (geocoding), OSRM (routing), Open-Meteo (weather).
+"""External API clients: Nominatim (geocoding), OSRM (routing), weather.
 
-All three are free and need no API key, which keeps the assessment
-self-contained and deployable anywhere.
+Weather goes through our tiny Vercel proxy (see ../weather-proxy/) which
+forwards to Open-Meteo and returns its JSON untouched. Render's free-tier
+shared egress IPs get 429s from Open-Meteo; the proxy runs on clean
+egress. All three upstream APIs are free and need no key.
 """
+import os
 import requests
 import time
 
 HEADERS = {"User-Agent": "HaulSafe/1.0 (candidate project)"}
 TIMEOUT = 25
+WEATHER_PROXY_URL = os.environ.get(
+    "WEATHER_PROXY_URL", "https://haulsafe-weather.vercel.app/api/weather"
+)
 
 
 def _get_with_retry(url, params):
@@ -18,6 +24,24 @@ def _get_with_retry(url, params):
             time.sleep(wait)
         try:
             r = requests.get(url, params=params, headers=HEADERS, timeout=TIMEOUT)
+            r.raise_for_status()
+            return r
+        except (requests.Timeout, requests.ConnectionError) as e:
+            last = e
+    raise last
+
+
+def _post_with_retry(url, payload):
+    """POST with retries incl. 429 backoff — weather is the critical path."""
+    last = None
+    for wait in (0, 5, 15):
+        if wait:
+            time.sleep(wait)
+        try:
+            r = requests.post(url, json=payload, headers=HEADERS, timeout=TIMEOUT)
+            if r.status_code == 429:
+                last = requests.HTTPError("429 from weather proxy")
+                continue
             r.raise_for_status()
             return r
         except (requests.Timeout, requests.ConnectionError) as e:
@@ -85,7 +109,7 @@ def get_route_via_waypoint(origin, destination, waypoint):
 
 
 def get_hourly_weather(points):
-    """Fetch hourly weather for many points in ONE Open-Meteo call.
+    """Fetch hourly weather for many points in ONE proxied Open-Meteo call.
 
     points: list of (lat, lng). Returns dict keyed by (lat, lng) ->
     {"time": [...ISO...], "wind": [...mph...], "rain": [...in/hr...], "snow": [...in/hr...]}.
@@ -94,20 +118,10 @@ def get_hourly_weather(points):
     """
     lats = ",".join(f"{p[0]:.4f}" for p in points)
     lngs = ",".join(f"{p[1]:.4f}" for p in points)
-    r = _get_with_retry(
-        "https://api.open-meteo.com/v1/forecast",
-        {
-            "latitude": lats,
-            "longitude": lngs,
-            "hourly": "wind_speed_10m,precipitation,snowfall",
-            "wind_speed_unit": "mph",
-            "precipitation_unit": "inch",
-            "temperature_unit": "fahrenheit",
-            "forecast_days": 3,
-            "timezone": "UTC",
-        },
-    )
+    r = _post_with_retry(WEATHER_PROXY_URL, {"latitude": lats, "longitude": lngs})
     payload = r.json()
+    if isinstance(payload, dict) and "error" in payload and "hourly" not in payload:
+        raise requests.HTTPError(f"weather proxy error: {payload['error']}")
     # Open-Meteo returns a list when multiple locations are requested,
     # a single object when only one is requested.
     items = payload if isinstance(payload, list) else [payload]
