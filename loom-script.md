@@ -1,8 +1,7 @@
 # HaulSafe — Loom walkthrough script (5–10 min)
 
-Narration script for the submission video. Works with either narrator — if Vinit
-records it himself, read these lines; if Pax narrates, this is the exact script.
-The demo example below is the one verified live in QA: Chicago → Denver.
+Narration script for the submission video. Read these lines as you record —
+the demo example below is the one verified live in QA: Chicago → Denver.
 
 ## Scene 1 — Hook (hero screen)
 **Show:** HaulSafe landing, logged out.
