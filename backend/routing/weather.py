@@ -14,21 +14,12 @@ TIMEOUT = 25
 WEATHER_PROXY_URL = os.environ.get(
     "WEATHER_PROXY_URL", "https://haulsafe-weather.vercel.app/api/weather"
 )
-
-
-def _get_with_retry(url, params):
-    """GET with one retry and backoff — external APIs hiccup."""
-    last = None
-    for wait in (0, 2):
-        if wait:
-            time.sleep(wait)
-        try:
-            r = requests.get(url, params=params, headers=HEADERS, timeout=TIMEOUT)
-            r.raise_for_status()
-            return r
-        except (requests.Timeout, requests.ConnectionError) as e:
-            last = e
-    raise last
+GEOCODE_PROXY_URL = os.environ.get(
+    "GEOCODE_PROXY_URL", "https://haulsafe-weather.vercel.app/api/geocode"
+)
+ROUTE_PROXY_URL = os.environ.get(
+    "ROUTE_PROXY_URL", "https://haulsafe-weather.vercel.app/api/route"
+)
 
 
 def _post_with_retry(url, payload):
@@ -51,10 +42,7 @@ def _post_with_retry(url, payload):
 
 def geocode(place: str):
     """Turn a place name into (lat, lng). Raises ValueError if not found."""
-    r = _get_with_retry(
-        "https://nominatim.openstreetmap.org/search",
-        {"q": place, "format": "json", "limit": 1},
-    )
+    r = _post_with_retry(GEOCODE_PROXY_URL, {"q": place})
     hits = r.json()
     if not hits:
         raise ValueError(f"Could not find a location for '{place}'")
@@ -62,14 +50,14 @@ def geocode(place: str):
 
 
 def get_routes(origin, destination):
-    """Ask OSRM for up to 3 alternative driving routes.
+    """Ask OSRM (via proxy) for up to 3 alternative driving routes.
 
     Returns a list of {"geometry": polyline, "distance_m": ..., "duration_s": ...}.
     """
     (olat, olng), (dlat, dlng) = origin, destination
-    r = _get_with_retry(
-        f"https://router.project-osrm.org/route/v1/driving/{olng},{olat};{dlng},{dlat}",
-        {"overview": "full", "geometries": "polyline", "alternatives": "3"},
+    r = _post_with_retry(
+        ROUTE_PROXY_URL,
+        {"coords": f"{olng},{olat};{dlng},{dlat}", "alternatives": True},
     )
     data = r.json()
     if data.get("code") != "Ok" or not data.get("routes"):
@@ -92,10 +80,9 @@ def get_route_via_waypoint(origin, destination, waypoint):
     """
     (olat, olng), (dlat, dlng) = origin, destination
     wlat, wlng = waypoint
-    r = _get_with_retry(
-        f"https://router.project-osrm.org/route/v1/driving/"
-        f"{olng},{olat};{wlng},{wlat};{dlng},{dlat}",
-        {"overview": "full", "geometries": "polyline"},
+    r = _post_with_retry(
+        ROUTE_PROXY_URL,
+        {"coords": f"{olng},{olat};{wlng},{wlat};{dlng},{dlat}"},
     )
     data = r.json()
     if data.get("code") != "Ok" or not data.get("routes"):
